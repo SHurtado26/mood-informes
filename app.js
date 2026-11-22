@@ -507,7 +507,7 @@
     for (const d of ds) { const x = valor(d), y = valor(mas(d, -n)); if (x !== null && y !== null) { a += x; b += y; k++; } }
     return k ? { a, b, k } : null;
   }
-  const textoDelta = (c) => (!E.comparar ? null : !c ? "Sin comparación" : c.b === 0 ? (c.a === 0 ? "Igual que antes" : "Antes: 0") : `${c.a > c.b ? "▲" : c.a < c.b ? "▼" : "="} ${dec(Math.abs((100 * (c.a - c.b)) / c.b), 0)} % frente a ${num(c.b)}`);
+  const textoDelta = (c) => (!E.comparar ? null : !c ? "Sin comparación" : c.b < 10 ? (c.a === c.b ? "Igual que antes" : `Antes: ${num(c.b)}`) : `${c.a > c.b ? "▲" : c.a < c.b ? "▼" : "="} ${dec(Math.abs((100 * (c.a - c.b)) / c.b), 0)} % frente a ${num(c.b)}`);
   // El stand de cada isla; la barra de abajo compara las tres islas entre sí.
   const stand = (nivel) => el("span", { class: "stand" }, el("img", { src: "img/stand.svg", width: 648, height: 712, alt: "" }),
     nivel === null ? null : el("span", { class: "nivel", "aria-hidden": "true" }, el("span", { estilo: { width: `${100 * Math.max(0, Math.min(1, nivel))}%` } })));
@@ -565,27 +565,50 @@
     if (!T || !T.filas.length) return enEspera("Taps en las islas", texto, "taps en la quincena", ["Chip NFC", "Código QR", "Mejor día"], ["Pronto verás", "los taps aquí"]);
     const tipos = Object.keys(TIPOS_TAP).filter((t) => T.filas.some((f) => f.tipo === t));
     const cubre = (d) => d >= T.desde && d <= T.hasta;
-    const contar = (isla, d, tipo = E.tipoTap) => (cubre(d) ? suma(T.filas.filter((f) => f.dia === d && (!isla || f.isla === isla) && (tipo === "todos" || f.tipo === tipo)).map((f) => f.cuenta)) : null);
+    // Hay islas cuyo chip no pasa por el contador: ahí no es cero, es sin medición.
+    const seMide = (isla, tipo, d) => !(T.sinMedir?.[tipo] || []).includes(isla) && !(T.desdeTipo?.[tipo] > d);
+    const contar = (isla, d, tipo = E.tipoTap) => (cubre(d) && (tipo === "todos" || seMide(isla, tipo, d)) ? suma(T.filas.filter((f) => f.dia === d && f.isla === isla && (tipo === "todos" || f.tipo === tipo)).map((f) => f.cuenta)) : null);
+    const sinChip = T.sinMedir?.nfc || [];
     const ds = diasRango(), total = (isla, tipo) => { const v = hay(ds.map((d) => contar(isla, d, tipo))); return v.length ? suma(v) : null; };
     const mx = Math.max(1, ...ISLAS.map(([n]) => total(n) ?? 0));
-    const horas = T.filas.some((f) => f.hora !== null && f.hora !== undefined);
-    const enH = (isla, h) => suma(T.filas.filter((f) => f.isla === isla && f.hora === h && f.dia >= E.desde && f.dia <= E.hasta && (E.tipoTap === "todos" || f.tipo === E.tipoTap)).map((f) => f.cuenta));
+    const horas = (T.horas || []).length > 0;
+    const enH = (isla, h) => suma(T.horas.filter((f) => f.isla === isla && f.hora === h).map((f) => f.cuenta));
+    const unidad = E.tipoTap === "nfc" ? ["toque del chip", "toques del chip"] : E.tipoTap === "qr" ? ["escaneo del QR", "escaneos del QR"] : E.tipoTap === "directa" ? ["entrada directa", "entradas directas"] : ["llegada", "llegadas"];
+    // Se compara solo lo que se midió igual en los dos tramos.
+    const tipoDelta = E.tipoTap === "todos" ? "qr" : E.tipoTap;
+    const conPref = (t) => (t && E.tipoTap === "todos" ? `QR: ${t}` : t);
     const botones = {};
     for (const b of T.botones || []) if (b.dia >= E.desde && b.dia <= E.hasta && elegidas().some(([n]) => n === b.isla)) botones[b.boton] = (botones[b.boton] || 0) + b.cuenta;
-    return el("section", { class: "seccion" }, el("header", {}, el("h2", { text: "Taps en las islas" }), el("p", { text: `${texto} Toca una isla para verla sola. Se cuentan toques, no personas.` })),
+    return el("section", { class: "seccion" }, el("header", {}, el("h2", { text: "Taps en las islas" }), el("p", { text: `${texto} Toca una isla para verla sola. Se cuentan llegadas, no personas.` })),
       filtros(true),
       tipos.length > 1 ? el("div", { class: "controles" }, el("div", { class: "seg", role: "group", "aria-label": "Tipo de entrada" }, ["todos", ...tipos].map((t) => el("button", { type: "button", "data-foco": `tt-${t}`, "aria-pressed": String(E.tipoTap === t), onclick: () => { E.tipoTap = t; refrescar(); }, text: t === "todos" ? "Todo" : TIPOS_TAP[t] })))) : null,
       el("div", { class: "islas" }, ISLAS.map(([n, c]) => {
         const t = total(n), mejor = ds.map((d) => [d, contar(n, d)]).filter((x) => x[1]).sort((a, b) => b[1] - a[1])[0];
-        return tarjetaIsla(n, c, { nivel: (t ?? 0) / mx, valor: num(t), rotulo: t === 1 ? "tap" : "taps", delta: textoDelta(pareado((d) => contar(n, d))), pares: [...tipos.map((k) => [TIPOS_TAP[k], num(total(n, k))]), ["Mejor día", mejor ? corta(mejor[0]) : "–"]] });
+        return tarjetaIsla(n, c, { nivel: (t ?? 0) / mx, valor: t === null && E.tipoTap === "nfc" && sinChip.includes(n) ? "Sin medir" : num(t), rotulo: t === 1 ? unidad[0] : unidad[1], delta: t === null ? null : conPref(textoDelta(pareado((d) => contar(n, d, tipoDelta)))), pares: [...tipos.map((k) => [TIPOS_TAP[k], k === "nfc" && sinChip.includes(n) ? "Sin medir" : num(total(n, k))]), ["Mejor día", mejor ? corta(mejor[0]) : "–"]] });
       })),
       el("div", { class: "controles", estilo: { "margin-top": "10px" } }, todasLasIslas()),
-      el("div", { class: "rejilla dos" },
-        el("div", { class: "tarjeta" }, el("h3", { text: "Taps por día" }), el("p", { class: "baja", text: "«Sin dato» es un día sin lectura, no un día en cero." }), grafIslas({ ...ejeDias(ds), valor: (isla, i) => contar(isla, ds[i]), unidad: "taps", nombre: "Taps por día y por isla" })),
-        horas ? el("div", { class: "tarjeta" }, el("h3", { text: "A qué hora llegan" }), el("p", { class: "baja", text: "Hora de Colombia, todo el tramo elegido." }), grafIslas({ ejes: [...Array(24).keys()].map((h) => ["", `${h}`]), largos: [...Array(24).keys()].map((h) => `De ${h}:00 a ${h}:59`), valor: (isla, h) => enH(isla, h), unidad: "taps", nombre: "Taps por hora y por isla" })) : null,
-        Object.keys(botones).length ? el("div", { class: "tarjeta todo" }, el("h3", { text: "Qué botón oprimen" }), el("p", { class: "baja", text: "Un clic muestra interés: no confirma una reseña ni un registro." }), barras(Object.entries(botones).sort((a, b) => b[1] - a[1]))) : null));
+      sinChip.length ? el("p", { class: "aviso-isla" }, el("b", { text: "El chip NFC solo se mide en Buenavista 2. " }), `En ${sinChip.join(" y ")} el chip abre la reseña de Google sin pasar por el contador: no es cero, no se puede contar.`) : null,
+      el("div", { class: "controles" }, subnav("nfc", [["dia", "Por día"], ["hora", "A qué hora"], ["boton", "Qué botón"]])),
+      E.sub.nfc === "hora" ? (horas ? el("div", { class: "tarjeta" }, el("h3", { text: "A qué hora llegan" }), el("p", { class: "baja", text: `Todo lo medido del ${rango(T.desde, T.horasHasta || T.hasta)}, hora de Colombia. No cambia con las fechas.` }), grafIslas({ ejes: [...Array(24).keys()].map((h) => ["", `${h}`]), largos: [...Array(24).keys()].map((h) => `De ${h}:00 a ${h}:59`), valor: (isla, h) => enH(isla, h), unidad: "llegadas", nombre: "Llegadas por hora y por isla" })) : null)
+        : E.sub.nfc === "boton" ? (Object.keys(botones).length ? el("div", { class: "tarjeta" }, el("h3", { text: "Qué botón oprimen" }), el("p", { class: "baja", text: `Clics en la página de cada isla, en las fechas elegidas. Un clic muestra interés: no confirma una reseña ni un registro.${T.botonesDesde ? ` Se miden desde el ${larga(T.botonesDesde)}.` : ""}` }), barras(Object.entries(botones).sort((a, b) => b[1] - a[1]))) : el("p", { class: "nota", text: "No hay clics en estas fechas." }))
+        : el("div", { class: "tarjeta" }, el("h3", { text: `${mayus(unidad[1])} por día` }), el("p", { class: "baja", text: "Chip, QR y enlace directo a la página de cada isla." }), grafIslas({ ...ejeDias(ds), valor: (isla, i) => contar(isla, ds[i]), unidad: unidad[1], nombre: "Llegadas por día y por isla" })));
   }
 
+  // Promedio por día antes y después de que empezaron los stands; solo días que Google ya entregó.
+  function antesDespues(G, m) {
+    const val = (f) => (m === "vistas" ? f.busqueda + f.maps : f[m]);
+    const filas = elegidas().map(([n, c]) => {
+      const x = G.diario.filter((f) => f.isla === n), a = x.filter((f) => f.dia < G.inicioStands), b = x.filter((f) => f.dia >= G.inicioStands);
+      return { n, c, a: prom(a.map(val)), b: prom(b.map(val)), da: a.length, db: b.length };
+    });
+    const mx = Math.max(1e-9, ...filas.flatMap((f) => [f.a, f.b]));
+    const ini = G.diario.map((f) => f.dia).sort()[0];
+    return el("div", { class: "tarjeta" }, el("h3", { text: "Antes y después de los stands" }), el("p", { class: "baja", text: `${MED_G[m][0]}, promedio por día. Antes: ${filas[0].da} días desde el ${larga(ini)}. Después: ${filas[0].db} días desde el ${larga(G.inicioStands)}.` }),
+      filas.map((f) => el("div", { class: "fila" }, el("span", { class: "cab" }, el("span", { class: "t", text: f.n }), el("span", { class: "n", text: `${dec(f.a)} a ${dec(f.b)}` })),
+        [["Antes", f.a, "#8a9aa0"], ["Después", f.b, f.c]].map(([t, v, c]) => ayuda(el("span", { class: "pista", tabindex: 0 }, el("span", { estilo: { width: `${(100 * v) / mx}%`, background: c } })), `${f.n}: ${t.toLowerCase()}`, [[dec(v), `${MED_G[m][0].toLowerCase()} por día`]])))),
+      el("div", { class: "clave" }, el("span", {}, el("i", { estilo: { background: "#8a9aa0" } }), "Antes"), el("span", {}, el("i", { estilo: { background: filas.length === 1 ? filas[0].c : "#024159" } }), "Después, con el color de cada isla")),
+      el("p", { class: "nota", text: "Muestra el cambio, no la causa: en ese tiempo también hubo contenido y otras acciones." }));
+  }
   const MED_G = { vistas: ["Veces vista", "veces vista"], ruta: ["Cómo llegar", "pidieron la ruta"], llamadas: ["Llamadas", "llamadas"], web: ["Clics al sitio", "clics al sitio"] };
   function google() {
     const G = I.google;
@@ -604,15 +627,15 @@
       el("div", { class: "controles" }, el("div", { class: "seg", role: "group", "aria-label": "Dato de Google" }, Object.entries(MED_G).map(([k, [t]]) => el("button", { type: "button", "data-foco": `g-${k}`, "aria-pressed": String(m === k), onclick: () => { E.medidaG = k; refrescar(); }, text: t })))),
       el("div", { class: "islas" }, ISLAS.map(([n, c]) => {
         const t = total(n, m), re = G.resenas.find((x) => x.isla === n);
-        return tarjetaIsla(n, c, { nivel: (t ?? 0) / mx, valor: num(t), rotulo: MED_G[m][1], delta: textoDelta(pareado((d) => dato(n, d, m))), pares: [...(m === "vistas" ? [["Cómo llegar", num(total(n, "ruta"))]] : [["Veces vista", num(total(n, "vistas"))]]), ["Reseñas", re ? num(re.total) : "–"], ["Calificación", re ? dec(re.promedio) : "–"]] });
+        return tarjetaIsla(n, c, { nivel: (t ?? 0) / mx, valor: num(t), rotulo: MED_G[m][1], delta: textoDelta(pareado((d) => dato(n, d, m))), pares: [...(m === "vistas" ? [["Cómo llegar", num(total(n, "ruta"))]] : [["Veces vista", num(total(n, "vistas"))]]), ["Reseñas", re ? num(re.total) : "–"], ["Nuevas", G.nuevas ? num(suma(G.nuevas.filter((x) => x.isla === n && x.dia >= E.desde && x.dia <= E.hasta).map((x) => x.cuenta))) : "–"], ["Calificación", re ? dec(re.promedio) : "–"]] });
       })),
       el("div", { class: "controles", estilo: { "margin-top": "10px" } }, todasLasIslas()),
-      el("div", { class: "rejilla dos" },
-        el("div", { class: "tarjeta" }, el("h3", { text: `${MED_G[m][0]} por día` }), el("p", { class: "baja", text: "Google entrega los datos con unos días de atraso." }), grafIslas({ ...ejeDias(ds), valor: (isla, i) => dato(isla, ds[i], m), unidad: MED_G[m][1], nombre: `${MED_G[m][0]} por día y por isla` })),
-        el("div", { class: "tarjeta" }, el("h3", { text: "Qué buscaban" }), el("p", { class: "baja", text: "Personas por mes. Google no informa las búsquedas con muy pocas personas." }),
+      el("div", { class: "controles" }, subnav("google", [["dia", "Por día"], ["buscan", "Qué buscaban"], ["antes", "Antes y después"]])),
+      E.sub.google === "buscan" ? el("div", { class: "tarjeta" }, el("h3", { text: "Qué buscaban" }), el("p", { class: "baja", text: "Personas por mes. Google no informa las búsquedas con muy pocas personas." }),
           meses.length > 1 ? el("div", { class: "controles" }, el("div", { class: "seg", role: "group", "aria-label": "Mes" }, meses.map((x) => el("button", { type: "button", "data-foco": `mes-${x}`, "aria-pressed": String(x === mes), onclick: () => { E.mesG = x; refrescar(); }, text: nomMes(x) })))) : mes ? el("p", { class: "m", text: nomMes(mes) }) : null,
-          palabras.length ? barras(palabras.map((b) => [b.palabra, b.personas, color[b.isla], b.isla])) : el("p", { class: "nota", text: "Sin búsquedas informadas." })),
-        el("div", { class: "tarjeta todo" }, el("h3", { text: "¿La vieron en Búsqueda o en Maps?" }),
+          palabras.length ? barras(palabras.map((b) => [b.palabra, b.personas, color[b.isla], b.isla])) : el("p", { class: "nota", text: "Sin búsquedas informadas." }))
+        : E.sub.google === "antes" ? antesDespues(G, m)
+        : el("div", { class: "rejilla dos" }, el("div", { class: "tarjeta" }, el("h3", { text: `${MED_G[m][0]} por día` }), el("p", { class: "baja", text: `Google entrega los datos con unos días de atraso: por ahora llegan hasta el ${larga(G.hasta || G.diario.at(-1).dia)}.` }), grafIslas({ ...ejeDias(ds), valor: (isla, i) => dato(isla, ds[i], m), unidad: MED_G[m][1], nombre: `${MED_G[m][0]} por día y por isla` })), el("div", { class: "tarjeta" }, el("h3", { text: "¿La vieron en Búsqueda o en Maps?" }), el("p", { class: "baja", text: "En las fechas elegidas." }),
           elegidas().map(([n]) => { const b = total(n, "busqueda"), mp = total(n, "maps"), t = (b ?? 0) + (mp ?? 0); return el("div", { class: "fila" }, el("span", { class: "cab" }, el("span", { class: "t", text: n }), el("span", { class: "n", text: t ? `${pct((100 * b) / t, 0)} Búsqueda, ${pct((100 * mp) / t, 0)} Maps` : "Sin dato" })),
             t ? el("span", { class: "pista pila" }, [[b, "#2c7fb0", "en Búsqueda"], [mp, "#a3306f", "en Maps"]].filter((x) => x[0]).map(([v, c, q]) => ayuda(el("span", { estilo: { background: c, flex: `${v} 0 0` } }), n, [[num(v), q]]))) : null); }),
           el("div", { class: "clave" }, [["Búsqueda", "#2c7fb0"], ["Maps", "#a3306f"]].map(([t, c]) => el("span", {}, el("i", { estilo: { background: c } }), t))))));
@@ -674,7 +697,7 @@
       el("p", { text: `Fuente: Instagram de @mood.helados medido con Metricool. Datos capturados el ${larga(I.capturado)} de ${I.capturado.slice(0, 4)}. «Sin dato» significa que la herramienta no lo entregó, no que sea cero.` }),
       el("p", { text: "La comparación usa la misma cantidad de días justo antes del tramo elegido y el promedio diario, para que los días sin dato no la inclinen." }),
       el("p", { text: "No incluye el detalle de cada historia, la inversión en pauta, TikTok ni ventas. Las vistas de la cuenta sí suman lo que Instagram contó de historias y pauta." }),
-      el("p", { text: `Taps de las islas: ${I.taps ? `contador de los stands, del ${rango(I.taps.desde, I.taps.hasta)}` : "todavía sin datos cargados"}. Fichas de Google: ${I.google ? `Perfil de Empresa de Google, capturado el ${larga(I.google.capturado)}` : "todavía sin conectar"}.` }));
+      el("p", { text: `Taps de las islas: ${I.taps ? `contador de los stands, del ${rango(I.taps.desde, I.taps.hasta)}` : "todavía sin datos cargados"}${I.taps?.descontados ? `, sin ${num(I.taps.descontados)} toques de prueba` : ""}. Fichas de Google: ${I.google ? `Perfil de Empresa de Google, capturado el ${larga(I.google.capturado)}` : "todavía sin conectar"}.` }));
   }
   const pie = () => $("pie").replaceChildren(logo("completo"), el("p", { text: "Preparado por BX3 para Mood." }));
 
@@ -703,7 +726,7 @@
     return p ? { t, p: [`${tit(p)} (${TIPO[p.tipo].toLowerCase()} del ${larga(p.dia)}): ${texto(p)}.${aun(p)}`], pieza: p, ir: ["publicaciones", "Ver publicaciones"] } : { t: "No hubo publicaciones en este periodo." };
   }
   const edadTop = () => { const e = I.audiencia.edad, tot = suma(e.map((f) => f.F + f.M + f.U)); return { tot, f: [...e].sort((a, b) => b.F + b.M + b.U - (a.F + a.M + a.U)).slice(0, 2), muj: (100 * suma(e.map((f) => f.F))) / tot, hom: (100 * suma(e.map((f) => f.M))) / tot }; };
-  const tapsDe = () => ISLAS.map(([n]) => [n, suma(I.taps.filas.filter((f) => f.isla === n && f.dia >= I.desde && f.dia <= I.hasta).map((f) => f.cuenta))]).sort((a, b) => b[1] - a[1]);
+  const tapsDe = () => ISLAS.map(([n]) => [n, suma(I.taps.filas.filter((f) => f.isla === n && f.dia >= I.desde && f.dia <= I.taps.hasta).map((f) => f.cuenta))]).sort((a, b) => b[1] - a[1]);
 
   // Cada pregunta: texto sugerido, pistas para reconocerla (con su peso) y respuesta.
   const PREGUNTAS = [
@@ -734,8 +757,8 @@
     { id: "donde", q: "¿De dónde son?", pistas: [[/donde|ciudad|pais|barranquilla|lugar/, 4]], r: () => { const c = I.audiencia.ciudades.slice(0, 4); return { t: `${c[0][0].split(",")[0]}: ${pct(c[0][1])} de los seguidores.`, p: [`Le siguen ${c.slice(1).map(([n, v]) => `${n.split(",")[0]} (${pct(v)})`).join(", ")}.`], ir: ["audiencia", "Ver la audiencia"] }; } },
     { id: "reels", q: "¿Se quedan viendo los reels?", pistas: [[/3 segundos|tres segundos|retencion|se quedan|quedaron|tiempo/, 4], [/reel|video/, 1]], r: () => { const rs = periodo().piezas.filter((p) => p.ver3 !== null), b = maxPor("ver3", rs); return rs.length ? { t: `En el reel típico, ${pct(mediana(rs.map((p) => p.ver3)))} de las vistas pasó de 3 segundos.`, p: [`El mejor: ${tit(b)}, con ${pct(b.ver3)}.`], pieza: b, ir: ["publicaciones", "Ver publicaciones"] } : { t: "No hubo reels en este periodo." }; } },
     { id: "cuantas", q: "¿Cuánto publicamos?", pistas: [[/cuant.*(public|reels|post|carrusel)/, 5]], r: () => { const ps = periodo().piezas, n = (t) => ps.filter((p) => p.tipo === t).length; return { t: `${num(ps.length)} publicaciones.`, p: [`Reels: ${n("reel")}. Carruseles: ${n("carrusel")}. Imágenes: ${n("imagen")}. Las historias no se cuentan.`], ir: ["publicaciones", "Verlas"] }; } },
-    { id: "taps", q: "¿Qué isla tuvo más taps?", pistas: [[/tap|nfc|chip|stand|\bqr\b/, 5], [/isla|meridiem|buenavista|alegra/, 2]], r: () => { if (!I.taps?.filas.length) return { t: "Todavía no hay taps cargados.", p: ["Cuando estén, aparecerán aquí y en la pestaña Taps NFC."], ir: ["nfc", "Ver la pestaña"] }; const x = tapsDe(); return { t: `${x[0][0]}: ${num(x[0][1])} taps.`, p: [`${x.slice(1).map(([n, v]) => `${n}: ${num(v)}`).join(". ")}. Son toques, no personas.`], ir: ["nfc", "Ver los taps"] }; } },
-    { id: "google", q: "¿Cómo nos ven en Google?", pistas: [[/google|maps|reseña|resena|ruta|como llegar|ficha/, 5]], r: () => { if (!I.google?.diario.length) return { t: "Las fichas de Google todavía no están conectadas.", p: ["Cuando lo estén, verás aquí cuánta gente las ve y cuánta pide la ruta."], ir: ["google", "Ver la pestaña"] }; const x = ISLAS.map(([n]) => { const f = I.google.diario.filter((q) => q.isla === n && q.dia >= I.desde && q.dia <= I.hasta); return [n, suma(f.map((q) => q.busqueda + q.maps)), suma(f.map((q) => q.ruta))]; }).sort((a, b) => b[1] - a[1]); return { t: `${x[0][0]} fue la más vista: ${num(x[0][1])} veces.`, p: x.map(([n, v, k]) => `${n}: ${num(v)} veces vista y ${num(k)} pidieron la ruta.`), ir: ["google", "Ver Google"] }; } },
+    { id: "taps", q: "¿Qué isla tuvo más taps?", pistas: [[/tap|nfc|chip|stand|\bqr\b/, 5], [/isla|meridiem|buenavista|alegra/, 2]], r: () => { if (!I.taps?.filas.length) return { t: "Todavía no hay taps cargados.", p: ["Cuando estén, aparecerán aquí y en la pestaña Taps NFC."], ir: ["nfc", "Ver la pestaña"] }; const x = tapsDe(); return { t: `${x[0][0]}: ${num(x[0][1])} llegadas.`, p: [`${x.slice(1).map(([n, v]) => `${n}: ${num(v)}`).join(". ")}. Cuenta chip, QR y enlace directo; son llegadas, no personas.`, I.taps.sinMedir?.nfc?.length ? `El chip de ${I.taps.sinMedir.nfc.join(" y ")} no se puede medir todavía.` : null], ir: ["nfc", "Ver los taps"] }; } },
+    { id: "google", q: "¿Cómo nos ven en Google?", pistas: [[/google|maps|reseña|resena|ruta|como llegar|ficha/, 5]], r: () => { if (!I.google?.diario.length) return { t: "Las fichas de Google todavía no están conectadas.", p: ["Cuando lo estén, verás aquí cuánta gente las ve y cuánta pide la ruta."], ir: ["google", "Ver la pestaña"] }; const x = ISLAS.map(([n]) => { const f = I.google.diario.filter((q) => q.isla === n && q.dia >= I.desde && q.dia <= I.hasta); return [n, suma(f.map((q) => q.busqueda + q.maps)), suma(f.map((q) => q.ruta))]; }).sort((a, b) => b[1] - a[1]); return { t: `${x[0][0]} fue la más vista: ${num(x[0][1])} veces.`, p: [`Del ${rango(I.desde, I.google.hasta)}, lo que Google ha entregado.`, ...x.map(([n, v, k]) => `${n}: ${num(v)} veces vista y ${num(k)} pidieron la ruta.`)], ir: ["google", "Ver Google"] }; } },
     { id: "periodo", q: "¿De qué fechas son los datos?", pistas: [[/fecha|periodo|actualiz|hasta cuando|hasta que dia|de cuando|fuente|de donde sal/, 5]], r: () => ({ t: sobre(), p: [`Son datos de Instagram medidos con Metricool, capturados el ${larga(I.capturado)} de ${I.capturado.slice(0, 4)}.`], ir: ["datos", "Cómo leer el informe"] }) },
     { id: "dalcance", q: "¿Qué es el alcance?", pistas: [[/(que|signific|diferencia).*alcance|alcance.*(que es|signific)/, 6]], r: () => ({ t: "Alcance: personas distintas que vieron el contenido.", p: ["Si una persona ve lo mismo tres veces, cuenta una sola en alcance y tres en vistas."] }) },
     { id: "dvistas", q: "¿Qué son las vistas?", pistas: [[/(que son|signific).*vistas/, 6]], r: () => ({ t: "Vistas: cuántas veces se mostró el contenido.", p: ["Una misma persona puede sumar varias. Incluye reels, publicaciones, historias y perfil."] }) },
@@ -925,7 +948,7 @@
       if (!I) return error("No se encontró este informe. Elige otro en la lista de arriba.");
       const ds = diasConDato();
       if (!ds.length) return error("Este informe todavía no tiene datos.");
-      E = { desde: ds[0], hasta: ds.at(-1), comparar: true, mood: "vistas", dia: null, formato: "todos", medida: "vistas", ocultos: new Set(), sexos: new Set(), retencion: "ver3", lugar: "ciudades", sinPrimero: false, masLugares: false, orden: ["vistas", false], sub: { resumen: "cifras", publicaciones: "ranking" }, isla: "todas", tipoTap: "todos", medidaG: "vistas", mesG: null };
+      E = { desde: ds[0], hasta: ds.at(-1), comparar: true, mood: "vistas", dia: null, formato: "todos", medida: "vistas", ocultos: new Set(), sexos: new Set(), retencion: "ver3", lugar: "ciudades", sinPrimero: false, masLugares: false, orden: ["vistas", false], sub: { resumen: "cifras", publicaciones: "ranking", nfc: "dia", google: "dia" }, isla: "todas", tipoTap: "todos", medidaG: "vistas", mesG: null };
       document.title = `Mood en Instagram: ${I.titulo.toLowerCase()}`;
       pie();
       vista = deDireccion();
